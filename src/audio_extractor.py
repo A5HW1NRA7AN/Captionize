@@ -1,11 +1,11 @@
 import os
-import ffmpeg
-import numpy as np
-import librosa
+from typing import List, Tuple
 from pydub import AudioSegment
 from pydub.silence import split_on_silence
-from typing import List, Tuple
-
+from moviepy.editor import VideoFileClip
+import numpy as np
+import wave
+import struct
 
 class AudioExtractor:
     """Class for extracting and processing audio from video files."""
@@ -22,59 +22,55 @@ class AudioExtractor:
         self.min_silence_len = min_silence_len
         self.silence_thresh = silence_thresh
         self.keep_silence = keep_silence
-        
-    def extract_audio(self, video_path: str, output_path: str = None) -> str:
-        """
-        Extract audio from a video file.
-        
-        Args:
-            video_path (str): Path to the video file.
-            output_path (str, optional): Path to save the extracted audio.
-                If None, saves in the same directory as video with .wav extension.
-                
-        Returns:
-            str: Path to the extracted audio file.
-        """
-        if not os.path.exists(video_path):
-            raise FileNotFoundError(f"Video file not found: {video_path}")
-        
-        if output_path is None:
-            base_path = os.path.splitext(video_path)[0]
-            output_path = f"{base_path}.wav"
-        
+
+    def extract_audio(self, video_path: str, output_path: str) -> str:
+        """Extract audio from video file using moviepy."""
         try:
-            # Extract audio using ffmpeg
-            (
-                ffmpeg
-                .input(video_path)
-                .output(output_path, acodec='pcm_s16le', ac=1, ar='16k')
-                .run(quiet=True, overwrite_output=True)
-            )
-            print(f"Audio extracted successfully: {output_path}")
-            return output_path
-        except ffmpeg.Error as e:
-            print(f"Error extracting audio: {e.stderr.decode() if e.stderr else str(e)}")
-            raise
-    
-    def segment_audio(self, audio_path: str) -> List[Tuple[AudioSegment, int, int]]:
-        """
-        Segment audio file based on silence detection.
-        
-        Args:
-            audio_path (str): Path to the audio file.
+            # Ensure input file exists
+            if not os.path.exists(video_path):
+                raise FileNotFoundError(f"Video file not found: {video_path}")
+
+            # Ensure output directory exists
+            os.makedirs(os.path.dirname(output_path), exist_ok=True)
+
+            # Load video and extract audio
+            print(f"Loading video: {video_path}")
+            video = VideoFileClip(video_path)
             
-        Returns:
-            List[Tuple[AudioSegment, int, int]]: List of tuples containing:
-                - AudioSegment object
-                - Start time in milliseconds
-                - End time in milliseconds
-        """
-        print(f"Segmenting audio: {audio_path}")
+            if video.audio is None:
+                raise ValueError("No audio track found in video file")
+                
+            audio = video.audio
+
+            # Write audio to WAV file
+            print(f"Extracting audio to: {output_path}")
+            audio.write_audiofile(output_path, fps=16000, nbytes=2, codec='pcm_s16le')
+            
+            # Clean up
+            video.close()
+            audio.close()
+
+            return output_path
+
+        except Exception as e:
+            raise RuntimeError(f"Error extracting audio: {str(e)}")
+
+    def process_video(self, video_path: str, output_dir: str) -> List[Tuple[str, float, float]]:
+        """Process video file and return audio segments."""
+        # Create audio file path
+        audio_path = os.path.join(output_dir, "extracted_audio.wav")
+        
+        # Extract audio
+        print(f"Extracting audio from: {video_path}")
+        print(f"Output audio path: {audio_path}")
+        self.extract_audio(video_path, audio_path)
         
         # Load audio file
-        audio = AudioSegment.from_file(audio_path)
+        print("Loading audio file for segmentation...")
+        audio = AudioSegment.from_wav(audio_path)
         
-        # Split on silence
+        # Split audio on silence
+        print("Splitting audio on silence...")
         chunks = split_on_silence(
             audio,
             min_silence_len=self.min_silence_len,
@@ -82,86 +78,25 @@ class AudioExtractor:
             keep_silence=self.keep_silence
         )
         
-        # Calculate start and end times for each chunk
+        # Save chunks and create segment info
         segments = []
-        current_position = 0
+        current_pos = 0
         
-        for chunk in chunks:
-            # Get chunk duration
-            chunk_duration = len(chunk)
+        for i, chunk in enumerate(chunks):
+            # Save chunk to file
+            chunk_path = os.path.join(output_dir, f"chunk_{i}.wav")
+            chunk.export(chunk_path, format="wav")
             
-            # Calculate start and end times
-            start_time = current_position
-            end_time = start_time + chunk_duration
+            # Calculate timing
+            duration = len(chunk)
+            start_time = current_pos
+            end_time = start_time + duration
+            current_pos = end_time
             
-            # Add segment to list
-            segments.append((chunk, start_time, end_time))
-            
-            # Update position
-            current_position = end_time
+            # Store segment info
+            segments.append((chunk_path, start_time / 1000.0, end_time / 1000.0))
         
-        print(f"Audio segmented into {len(segments)} chunks")
         return segments
-    
-    def save_segments(self, segments: List[Tuple[AudioSegment, int, int]], 
-                     output_dir: str) -> List[Tuple[str, int, int]]:
-        """
-        Save audio segments to files.
-        
-        Args:
-            segments (List[Tuple[AudioSegment, int, int]]): List of audio segments.
-            output_dir (str): Directory to save the segments.
-            
-        Returns:
-            List[Tuple[str, int, int]]: List of tuples containing:
-                - Path to saved segment
-                - Start time in milliseconds
-                - End time in milliseconds
-        """
-        os.makedirs(output_dir, exist_ok=True)
-        
-        saved_segments = []
-        for i, (segment, start_time, end_time) in enumerate(segments):
-            segment_path = os.path.join(output_dir, f"segment_{i:04d}.wav")
-            segment.export(segment_path, format="wav")
-            saved_segments.append((segment_path, start_time, end_time))
-        
-        return saved_segments
-    
-    def process_video(self, video_path: str, output_dir: str = None) -> List[Tuple[str, int, int]]:
-        """
-        Process a video file: extract audio and segment it.
-        
-        Args:
-            video_path (str): Path to the video file.
-            output_dir (str, optional): Directory to save extracted audio and segments.
-                If None, creates a directory based on the video filename.
-                
-        Returns:
-            List[Tuple[str, int, int]]: List of tuples containing:
-                - Path to saved segment
-                - Start time in milliseconds
-                - End time in milliseconds
-        """
-        # Create output directory if not provided
-        if output_dir is None:
-            video_name = os.path.splitext(os.path.basename(video_path))[0]
-            output_dir = os.path.join(os.path.dirname(video_path), f"{video_name}_audio")
-        
-        os.makedirs(output_dir, exist_ok=True)
-        
-        # Extract audio
-        audio_path = os.path.join(output_dir, "extracted_audio.wav")
-        self.extract_audio(video_path, audio_path)
-        
-        # Segment audio
-        segments = self.segment_audio(audio_path)
-        
-        # Save segments
-        segments_dir = os.path.join(output_dir, "segments")
-        saved_segments = self.save_segments(segments, segments_dir)
-        
-        return saved_segments
 
 
 if __name__ == "__main__":
@@ -181,3 +116,6 @@ if __name__ == "__main__":
         print(f"Segment {i}: {segment_path} ({start_ms}ms - {end_ms}ms)")
     if len(segments) > 5:
         print("...")
+
+
+

@@ -8,43 +8,46 @@ class SubtitleFormatter:
     """Class for formatting recognized text into subtitle formats."""
     
     @staticmethod
-    def ms_to_timestamp(ms: int) -> str:
+    def ms_to_timestamp(time_in_seconds: float) -> str:
         """
-        Convert milliseconds to SRT timestamp format (HH:MM:SS,mmm).
+        Convert seconds to SRT timestamp format (HH:MM:SS,mmm).
         
         Args:
-            ms (int): Time in milliseconds.
+            time_in_seconds (float): Time in seconds.
             
         Returns:
             str: Formatted timestamp.
         """
+        # Convert seconds to milliseconds and round to nearest integer
+        ms_total = int(round(time_in_seconds * 1000))
+        
         # Calculate hours, minutes, seconds, and milliseconds
-        hours = ms // 3600000
-        ms %= 3600000
-        minutes = ms // 60000
-        ms %= 60000
-        seconds = ms // 1000
-        ms %= 1000
+        hours = ms_total // 3600000
+        ms_total %= 3600000
+        minutes = ms_total // 60000
+        ms_total %= 60000
+        seconds = ms_total // 1000
+        ms = ms_total % 1000
         
         # Format as HH:MM:SS,mmm
         return f"{hours:02d}:{minutes:02d}:{seconds:02d},{ms:03d}"
     
     @staticmethod
-    def create_subtitle_line(index: int, start_ms: int, end_ms: int, text: str) -> str:
+    def create_subtitle_line(index: int, start_time: float, end_time: float, text: str) -> str:
         """
         Create a subtitle line in SRT format.
         
         Args:
             index (int): Subtitle index number.
-            start_ms (int): Start time in milliseconds.
-            end_ms (int): End time in milliseconds.
+            start_time (float): Start time in seconds.
+            end_time (float): End time in seconds.
             text (str): Subtitle text.
             
         Returns:
             str: Formatted subtitle line.
         """
-        start_timestamp = SubtitleFormatter.ms_to_timestamp(start_ms)
-        end_timestamp = SubtitleFormatter.ms_to_timestamp(end_ms)
+        start_timestamp = SubtitleFormatter.ms_to_timestamp(start_time)
+        end_timestamp = SubtitleFormatter.ms_to_timestamp(end_time)
         
         return f"{index}\n{start_timestamp} --> {end_timestamp}\n{text}\n"
     
@@ -71,7 +74,7 @@ class SubtitleFormatter:
         print(f"SRT file created: {output_file}")
     
     @staticmethod
-    def clean_and_format_srt(recognized_segments: List[Tuple[str, int, int]], 
+    def clean_and_format_srt(recognized_segments: List[Tuple[str, float, float]], 
                              output_file: str,
                              min_duration_ms: int = 500,
                              max_duration_ms: int = 7000,
@@ -80,31 +83,33 @@ class SubtitleFormatter:
         Clean and format recognized text segments as SRT file with improved readability.
         
         Args:
-            recognized_segments (List[Tuple[str, int, int]]): List of tuples containing:
+            recognized_segments (List[Tuple[str, float, float]]): List of tuples containing:
                 - Recognized text
-                - Start time in milliseconds
-                - End time in milliseconds
+                - Start time in seconds
+                - End time in seconds
             output_file (str): Path to output SRT file.
             min_duration_ms (int): Minimum duration for a subtitle in milliseconds.
             max_duration_ms (int): Maximum duration for a subtitle in milliseconds.
             merge_threshold_ms (int): Threshold for merging nearby segments in milliseconds.
         """
-        # Filter out empty segments
-        filtered_segments = [(text, start, end) for text, start, end in recognized_segments if text.strip()]
+        # Convert all times to milliseconds for processing
+        segments = [(text, int(start * 1000), int(end * 1000)) 
+                   for text, start, end in recognized_segments if text.strip()]
         
-        if not filtered_segments:
+        if not segments:
             print("No non-empty recognized segments found.")
             return
         
-        # Merge segments that are close to each other
+        # Process segments
         merged_segments = []
-        current_text = filtered_segments[0][0]
-        current_start = filtered_segments[0][1]
-        current_end = filtered_segments[0][2]
+        current_text = segments[0][0]
+        current_start = segments[0][1]
+        current_end = segments[0][2]
         
-        for text, start, end in filtered_segments[1:]:
-            # If this segment starts soon after the current one ends, merge them
+        for text, start, end in segments[1:]:
+            # If this segment starts soon after the current one ends
             if start - current_end <= merge_threshold_ms:
+                # Merge the segments
                 current_text += " " + text
                 current_end = end
             else:
@@ -133,9 +138,11 @@ class SubtitleFormatter:
                         segment_start = current_start + i * max_duration_ms
                         segment_end = segment_start + segment_duration
                         
-                        merged_segments.append((segment_text, segment_start, segment_end))
+                        # Convert back to seconds for storage
+                        merged_segments.append((segment_text, segment_start / 1000, segment_end / 1000))
                 else:
-                    merged_segments.append((current_text, current_start, current_end))
+                    # Convert back to seconds for storage
+                    merged_segments.append((current_text, current_start / 1000, current_end / 1000))
                 
                 # Start a new segment
                 current_text = text
@@ -147,7 +154,7 @@ class SubtitleFormatter:
             current_end = current_start + min_duration_ms
         
         if current_end - current_start > max_duration_ms:
-            # Split the last segment if too long
+            # Split the last segment if too long (similar to above)
             words = current_text.split()
             segments_needed = (current_end - current_start) // max_duration_ms + 1
             words_per_segment = max(1, len(words) // segments_needed)
@@ -166,14 +173,16 @@ class SubtitleFormatter:
                 segment_start = current_start + i * max_duration_ms
                 segment_end = segment_start + segment_duration
                 
-                merged_segments.append((segment_text, segment_start, segment_end))
+                # Convert back to seconds for storage
+                merged_segments.append((segment_text, segment_start / 1000, segment_end / 1000))
         else:
-            merged_segments.append((current_text, current_start, current_end))
+            # Convert back to seconds for storage
+            merged_segments.append((current_text, current_start / 1000, current_end / 1000))
         
         # Create SRT file
         with open(output_file, 'w', encoding='utf-8') as f:
-            for i, (text, start_ms, end_ms) in enumerate(merged_segments, 1):
-                subtitle_line = SubtitleFormatter.create_subtitle_line(i, start_ms, end_ms, text)
+            for i, (text, start_time, end_time) in enumerate(merged_segments, 1):
+                subtitle_line = SubtitleFormatter.create_subtitle_line(i, start_time, end_time, text)
                 f.write(subtitle_line + "\n")
         
         print(f"Enhanced SRT file created: {output_file}")
@@ -262,3 +271,5 @@ if __name__ == "__main__":
         SubtitleFormatter.clean_and_format_srt(sample_segments, args.output)
     else:
         print("Please provide either an input file with recognized segments or an existing SRT file to adjust.")
+
+

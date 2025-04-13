@@ -7,7 +7,6 @@ from enum import Enum
 import speech_recognition as sr
 from vosk import Model, KaldiRecognizer, SetLogLevel
 import json
-import deepspeech
 import wave
 from tqdm import tqdm
 import librosa
@@ -22,104 +21,18 @@ class LanguageCode(Enum):
 
 
 class SpeechRecognizer:
-    """Class for speech recognition in multiple languages."""
+    """Class for performing speech recognition using various models."""
     
-    def __init__(self, models_dir: str = "models"):
-        """
-        Initialize the SpeechRecognizer.
-        
-        Args:
-            models_dir (str): Directory containing the speech recognition models.
-        """
-        self.models_dir = models_dir
+    def __init__(self):
+        """Initialize the speech recognizer."""
         self.models = {}
-        SetLogLevel(-1)  # Disable Vosk logging
-        
-        # Ensure models directory exists
-        os.makedirs(models_dir, exist_ok=True)
+        self.models_dir = os.path.join(os.path.dirname(__file__), "..", "models")
+        os.makedirs(self.models_dir, exist_ok=True)
     
-    def download_model(self, language: Union[str, LanguageCode]):
-        """
-        Download required model for the specified language.
-        
-        Args:
-            language (Union[str, LanguageCode]): Language to download model for.
-        
-        Note: This is a placeholder. In a real implementation, you'd download
-        models from official sources or include them with your project.
-        """
-        if isinstance(language, str):
-            language = LanguageCode(language.lower())
-        
+    def _load_vosk_model(self, language: LanguageCode) -> Model:
+        """Load Vosk model for the specified language."""
         language_dir = os.path.join(self.models_dir, language.value)
-        os.makedirs(language_dir, exist_ok=True)
-        
-        print(f"[INFO] Model for {language.value} should be downloaded to {language_dir}")
-        print(f"[INFO] In a real implementation, this would download the model automatically.")
-        print(f"[INFO] For now, please manually download and place appropriate models in this directory.")
-        
-        # Model download instructions
-        if language == LanguageCode.ENGLISH:
-            print("Download English model from: https://alphacephei.com/vosk/models/vosk-model-small-en-us-0.15.zip")
-            print("or DeepSpeech model from: https://github.com/mozilla/DeepSpeech/releases/download/v0.9.3/deepspeech-0.9.3-models.pbmm")
-        elif language == LanguageCode.HINDI:
-            print("Download Hindi model from: https://alphacephei.com/vosk/models/vosk-model-small-hi-0.22.zip")
-        elif language == LanguageCode.TAMIL:
-            print("Download Tamil model from: https://alphacephei.com/vosk/models/vosk-model-small-ta-0.5.zip")
-        elif language == LanguageCode.JAPANESE:
-            print("Download Japanese model from: https://alphacephei.com/vosk/models/vosk-model-small-ja-0.22.zip")
-    
-    def _load_vosk_model(self, language: Union[str, LanguageCode]) -> Model:
-        """
-        Load Vosk model for the specified language.
-        
-        Args:
-            language (Union[str, LanguageCode]): Language to load model for.
-            
-        Returns:
-            Model: Loaded Vosk model.
-        """
-        if isinstance(language, str):
-            language = LanguageCode(language.lower())
-        
-        language_dir = os.path.join(self.models_dir, language.value)
-        
-        if not os.path.exists(language_dir):
-            self.download_model(language)
-            raise FileNotFoundError(f"Model for {language.value} not found. Please download it first.")
-        
-        return Model(language_dir)
-    
-    def _load_deepspeech_model(self, language: Union[str, LanguageCode] = LanguageCode.ENGLISH) -> deepspeech.Model:
-        """
-        Load DeepSpeech model (currently only for English).
-        
-        Args:
-            language (Union[str, LanguageCode]): Language to load model for.
-            
-        Returns:
-            deepspeech.Model: Loaded DeepSpeech model.
-        """
-        if isinstance(language, str):
-            language = LanguageCode(language.lower())
-        
-        if language != LanguageCode.ENGLISH:
-            raise ValueError("DeepSpeech currently only supports English")
-        
-        language_dir = os.path.join(self.models_dir, language.value)
-        model_path = os.path.join(language_dir, "deepspeech-0.9.3-models.pbmm")
-        
-        if not os.path.exists(model_path):
-            self.download_model(language)
-            raise FileNotFoundError(f"DeepSpeech model not found at {model_path}. Please download it first.")
-        
-        model = deepspeech.Model(model_path)
-        
-        # Load scorer if available (improves accuracy)
-        scorer_path = os.path.join(language_dir, "deepspeech-0.9.3-models.scorer")
-        if os.path.exists(scorer_path):
-            model.enableExternalScorer(scorer_path)
-        
+        model = Model(language_dir)
         return model
     
     def _get_model(self, language: Union[str, LanguageCode], model_type: str = "vosk"):
@@ -128,7 +41,7 @@ class SpeechRecognizer:
         
         Args:
             language (Union[str, LanguageCode]): Language to get model for.
-            model_type (str): Type of model to use ("vosk" or "deepspeech").
+            model_type (str): Type of model to use ("vosk" or "sr").
             
         Returns:
             Model: Loaded model.
@@ -141,8 +54,6 @@ class SpeechRecognizer:
         if model_key not in self.models:
             if model_type == "vosk":
                 self.models[model_key] = self._load_vosk_model(language)
-            elif model_type == "deepspeech":
-                self.models[model_key] = self._load_deepspeech_model(language)
             else:
                 raise ValueError(f"Unsupported model type: {model_type}")
         
@@ -185,27 +96,6 @@ class SpeechRecognizer:
             result += final_result["text"]
         
         return result.strip()
-    
-    def recognize_with_deepspeech(self, audio_path: str) -> str:
-        """
-        Recognize speech in audio file using DeepSpeech.
-        
-        Args:
-            audio_path (str): Path to the audio file.
-            
-        Returns:
-            str: Recognized text.
-        """
-        model = self._get_model(LanguageCode.ENGLISH, "deepspeech")
-        
-        # Load audio file
-        audio, sample_rate = librosa.load(audio_path, sr=16000, mono=True)
-        
-        # Ensure we have a 16-bit int array for DeepSpeech
-        audio = (audio * 32767).astype(np.int16)
-        
-        # Recognize speech
-        return model.stt(audio)
     
     def recognize_with_sr(self, audio_path: str, language: Union[str, LanguageCode]) -> str:
         """
@@ -259,7 +149,6 @@ class SpeechRecognizer:
             model_type (str): Type of model to use:
                 - "auto": Automatically choose the best model
                 - "vosk": Use Vosk model
-                - "deepspeech": Use DeepSpeech model (English only)
                 - "sr": Use SpeechRecognition library
             
         Returns:
@@ -270,13 +159,6 @@ class SpeechRecognizer:
         
         if model_type == "auto":
             # Try to use the best model for the language
-            if language == LanguageCode.ENGLISH:
-                try:
-                    return self.recognize_with_deepspeech(audio_path)
-                except (FileNotFoundError, ImportError, ValueError) as e:
-                    print(f"DeepSpeech error: {e}")
-                    pass
-            
             try:
                 return self.recognize_with_vosk(audio_path, language)
             except (FileNotFoundError, ImportError, ValueError) as e:
@@ -291,11 +173,6 @@ class SpeechRecognizer:
         
         elif model_type == "vosk":
             return self.recognize_with_vosk(audio_path, language)
-        
-        elif model_type == "deepspeech":
-            if language != LanguageCode.ENGLISH:
-                raise ValueError("DeepSpeech only supports English")
-            return self.recognize_with_deepspeech(audio_path)
         
         elif model_type == "sr":
             return self.recognize_with_sr(audio_path, language)
@@ -339,7 +216,7 @@ if __name__ == "__main__":
                         choices=["english", "hindi", "tamil", "japanese"],
                         help="Language of the audio")
     parser.add_argument("--model", default="auto", 
-                        choices=["auto", "vosk", "deepspeech", "sr"],
+                        choices=["auto", "vosk", "sr"],
                         help="Model type to use")
     args = parser.parse_args()
     
@@ -347,3 +224,4 @@ if __name__ == "__main__":
     text = recognizer.recognize(args.audio, args.language, args.model)
     
     print(f"Recognized text: {text}")
+
